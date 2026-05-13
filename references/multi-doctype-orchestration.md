@@ -117,16 +117,22 @@ Doc_events can fire more than you expect:
 - Scheduler retries a failed job → background spawn re-runs
 - Migration re-runs an on_update_after_submit
 
-Make spawns idempotent by checking for existence first:
+Make spawns idempotent by checking for existence first. The link from a Delivery Note back to its source Sales Order lives on `Delivery Note Item` (the child table), so the check must join through the child:
 
 ```python
 def create_delivery_note_draft(so):
-    existing = frappe.db.exists("Delivery Note", {
-        "against_sales_order": so.name,
-        "docstatus": ["in", [0, 1]],   # don't count cancelled
-    })
+    existing = frappe.db.sql(
+        """
+        SELECT dn.name
+        FROM `tabDelivery Note` dn
+        JOIN `tabDelivery Note Item` dni ON dni.parent = dn.name
+        WHERE dni.against_sales_order = %s AND dn.docstatus < 2
+        LIMIT 1
+        """,
+        (so.name,),
+    )
     if existing:
-        return frappe.get_doc("Delivery Note", existing)
+        return frappe.get_doc("Delivery Note", existing[0][0])
 
     dn = frappe.new_doc("Delivery Note")
     # ...
@@ -134,7 +140,7 @@ def create_delivery_note_draft(so):
     return dn
 ```
 
-For child-table-level linking (one SO → many DNs but each item only once), check `against_sales_order_item` similarly.
+For row-level idempotency (one SO Item should only ever be on a single non-cancelled DN), check `so_detail` instead of `against_sales_order` — that's the per-row link.
 
 ## Permission bypass: when and why
 
@@ -189,16 +195,33 @@ Always tell the user which mode they want. Don't silently pick.
 
 ## Linking records (`against_*` fields)
 
-ERPnext doctypes have a standard `against_<source_doctype>` pattern on child rows:
+In ERPnext, the load-bearing link from a downstream doc back to the source doc lives on the **child item rows**, not on the parent. The parent Delivery Note does not have an `against_sales_order` field — only `Delivery Note Item` does. Forgetting this and querying the parent for `against_sales_order` returns nothing.
 
-| Source | Child row field |
-|--------|------------------|
-| Sales Order → Delivery Note | `against_sales_order` (parent), `so_detail` (child row name) |
-| Sales Order → Sales Invoice | `sales_order` (parent), `so_detail` |
-| Purchase Order → Purchase Receipt | `purchase_order`, `purchase_order_item` |
-| Purchase Order → Purchase Invoice | `purchase_order`, `po_detail` |
+| Source → Target | Field on target child row | What it points at |
+|-----------------|----------------------------|--------------------|
+| Sales Order → Delivery Note | `against_sales_order` on `Delivery Note Item` | parent SO name |
+| Sales Order → Delivery Note | `so_detail` on `Delivery Note Item` | the SO Item row name (child) |
+| Sales Order → Sales Invoice | `sales_order` on `Sales Invoice Item` | parent SO name |
+| Sales Order → Sales Invoice | `so_detail` on `Sales Invoice Item` | the SO Item row name |
+| Purchase Order → Purchase Receipt | `purchase_order` on `Purchase Receipt Item` | parent PO name |
+| Purchase Order → Purchase Receipt | `purchase_order_item` on `Purchase Receipt Item` | the PO Item row name |
+| Purchase Order → Purchase Invoice | `purchase_order` on `Purchase Invoice Item` | parent PO name |
+| Purchase Order → Purchase Invoice | `po_detail` on `Purchase Invoice Item` | the PO Item row name |
 
-Setting these correctly is what makes ERPnext's reports (Outstanding SO Items, Pending Receipts) work. Skipping them means downstream reports are wrong.
+Setting both — the parent-name field AND the row-name field — is what makes ERPnext's "Outstanding SO Items" and "Pending Receipts" reports work. Setting only one (or worse, setting them on the wrong level) silently breaks the reports.
+
+To check "does a non-cancelled downstream doc already exist for this SO?", query the child table and join to the parent for the docstatus:
+
+```python
+existing = frappe.db.sql("""
+    SELECT dn.name
+    FROM `tabDelivery Note` dn
+    JOIN `tabDelivery Note Item` dni ON dni.parent = dn.name
+    WHERE dni.against_sales_order = %s
+      AND dn.docstatus < 2
+    LIMIT 1
+""", (sales_order_name,))
+```
 
 You can also use `frappe.model.mapper.get_mapped_doc(...)` to handle the mapping declaratively:
 
@@ -239,20 +262,31 @@ import frappe
 from frappe.utils import nowdate
 
 def spawn_delivery_note(doc, method):
-    if frappe.db.exists("Delivery Note", {"against_sales_order": doc.name, "docstatus": ["<", 2]}):
-        return  # idempotent
+    # Idempotency: against_sales_order lives on Delivery Note Item, not the parent.
+    # Query through the child table and join to the parent for docstatus.
+    existing = frappe.db.sql(
+        """
+        SELECT dn.name
+        FROM `tabDelivery Note` dn
+        JOIN `tabDelivery Note Item` dni ON dni.parent = dn.name
+        WHERE dni.against_sales_order = %s AND dn.docstatus < 2
+        LIMIT 1
+        """,
+        (doc.name,),
+    )
+    if existing:
+        return  # at least one non-cancelled DN already covers this SO
 
     dn = frappe.new_doc("Delivery Note")
     dn.customer = doc.customer
     dn.posting_date = nowdate()
-    dn.against_sales_order = doc.name  # also set on parent for easier filtering
     for item in doc.items:
         dn.append("items", {
             "item_code": item.item_code,
             "qty": item.qty,
             "warehouse": item.warehouse,
-            "against_sales_order": doc.name,
-            "so_detail": item.name,
+            "against_sales_order": doc.name,   # link lives here, on the child row
+            "so_detail": item.name,            # row-level link to the SO Item
             "uom": item.uom,
             "rate": item.rate,
         })
@@ -275,9 +309,18 @@ def spawn_delivery_note(doc, method):
     )
 
 def get_warehouse_team_emails(dn):
-    # Replace with your real lookup
-    return frappe.db.get_all(
-        "User", filters={"role_profile_name": "Warehouse Team"}, pluck="email"
+    # "Warehouse Team" is a Role (not a Role Profile). The link table between User and
+    # Role is `Has Role`. Filter to enabled users with a non-empty email.
+    return frappe.db.sql_list(
+        """
+        SELECT DISTINCT u.email
+        FROM `tabUser` u
+        JOIN `tabHas Role` r ON r.parent = u.name
+        WHERE r.role = %s
+          AND u.enabled = 1
+          AND IFNULL(u.email, '') != ''
+        """,
+        ("Warehouse Team",),
     )
 ```
 
