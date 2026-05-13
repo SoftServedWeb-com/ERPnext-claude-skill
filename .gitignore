@@ -1,0 +1,33 @@
+# skill-creator workspaces / eval runs (large, generated)
+workspace/
+*-workspace/
+iteration-*/
+
+# packaged skill artifacts
+*.skill
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# OS junk
+desktop.ini
+
+# logs
+*.log
+nohup.out
+
+# misc local
+.env
+.env.local

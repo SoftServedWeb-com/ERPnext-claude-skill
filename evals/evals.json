@@ -1,0 +1,26 @@
+{
+  "skill_name": "erpnext-workflow-automation",
+  "evals": [
+    {
+      "id": 0,
+      "name": "po-conditional-approval-workflow",
+      "prompt": "I'm working in my Frappe v15 app at apps/billing_ext. I need to set up a Purchase Order approval workflow with these rules:\n\n- New drafts go to 'Pending Manager' when submitted by a Purchase User.\n- POs with grand_total < 5000 can be approved by Purchase Manager directly (state goes to 'Approved').\n- POs with grand_total >= 5000 need Purchase Manager to forward to 'Pending CFO', then CFO approves to 'Approved'.\n- Anyone can Reject from either pending state.\n- Original requester (the doc owner) must NOT be able to self-approve.\n- When a PO is Approved or Rejected, email the requester (the doc owner). Subject and body should reference the PO number, supplier, and amount.\n- This needs to install cleanly on a fresh site, so fixture everything correctly.\n\nGive me the full implementation: file paths, JSON for workflow + states + actions + notifications, the fixtures registration in hooks.py, and the bench commands to apply. Mention any non-obvious choices you're making (e.g., permission interactions).",
+      "files": [],
+      "assertions": []
+    },
+    {
+      "id": 1,
+      "name": "so-to-dn-spawn-with-notification",
+      "prompt": "ERPnext v15 task. When a Sales Order is submitted in our system, I want to auto-create a Delivery Note draft with the same line items. Requirements:\n\n- Copy customer, items, qty, warehouse, rate, uom from the SO line items.\n- Set the linking fields so ERPnext's SO/DN tracking reports work correctly (against_sales_order, so_detail on each item row).\n- If a non-cancelled DN already exists for this SO, don't create a second one (idempotent).\n- Email the warehouse team (we have a Role 'Warehouse Team' assigned to ~4 users) with a link to the new DN draft.\n- Original SO submitter may not have create permission on Delivery Note — handle that.\n- If the DN spawn fails, the SO submit should still succeed. Log the failure so we can debug.\n\nApp name is 'logistics_ops'. Show me the hooks.py wiring, the override module code, and the bench commands. Flag any tradeoffs (sync vs background, permission bypass, etc).",
+      "files": [],
+      "assertions": []
+    },
+    {
+      "id": 2,
+      "name": "customer-compliance-client-script",
+      "prompt": "I want to add a 'Compliance Check' workflow to the Customer form in our ERPnext v15 instance. App name is 'crm_ext'.\n\nBehavior:\n- When customer_group is 'Corporate' AND compliance_checked is not yet 1, show a 'Run Compliance Check' button in the form actions section.\n- Clicking the button opens a dialog with three fields: checker_name (required text), passed (checkbox, default checked), and notes (text area).\n- On dialog submit, save those values to custom fields on the Customer (custom_compliance_checker, custom_compliance_passed, custom_compliance_notes, custom_compliance_checked = 1), then reload the form.\n- The button must not appear once compliance_checked is 1, even if the user re-edits the customer group.\n- These custom fields need to deploy via fixtures so they exist on staging/prod.\n\nGive me the client script JS, the custom field JSON, the fixtures registration, and the bench commands. Use the app-shipped .js pattern (not the Client Script doctype).",
+      "files": [],
+      "assertions": []
+    }
+  ]
+}
